@@ -1,0 +1,49 @@
+
+struct PPM
+{
+	std::string magic, fileName;
+	int h, w, max;
+	uint8_t buffer[INPUT_C*INPUT_H*INPUT_W];
+};
+
+
+
+void readPPMFile(const std::string& filename, PPM& ppm)
+{
+	ppm.fileName = filename;
+	std::ifstream infile(locateFile(filename), std::ifstream::binary);
+	infile >> ppm.magic >> ppm.w >> ppm.h >> ppm.max;
+	infile.seekg(1, infile.cur);
+	infile.read(reinterpret_cast<char*>(ppm.buffer), ppm.w * ppm.h * 3);
+}
+
+void writePPMFileWithBBox(const std::string& filename, PPM ppm, BBox bbox)
+{
+	std::ofstream outfile("./" + filename, std::ofstream::binary);
+	assert(!outfile.fail());
+	outfile << "P6" << "\n" << ppm.w << " " << ppm.h << "\n" << ppm.max << "\n";
+	auto round = [](float x)->int {return int(std::floor(x + 0.5f)); };
+	for (int x = int(bbox.x1); x < int(bbox.x2); ++x)
+	{
+		// bbox top border
+		ppm.buffer[(round(bbox.y1) * ppm.w + x) * 3] = 255;
+		ppm.buffer[(round(bbox.y1) * ppm.w + x) * 3 + 1] = 0;
+		ppm.buffer[(round(bbox.y1) * ppm.w + x) * 3 + 2] = 0;
+		// bbox bottom border
+		ppm.buffer[(round(bbox.y2) * ppm.w + x) * 3] = 255;
+		ppm.buffer[(round(bbox.y2) * ppm.w + x) * 3 + 1] = 0;
+		ppm.buffer[(round(bbox.y2) * ppm.w + x) * 3 + 2] = 0;
+	}
+	for (int y = int(bbox.y1); y < int(bbox.y2); ++y)
+	{
+		// bbox left border
+		ppm.buffer[(y * ppm.w + round(bbox.x1)) * 3] = 255;
+		ppm.buffer[(y * ppm.w + round(bbox.x1)) * 3 + 1] = 0;
+		ppm.buffer[(y * ppm.w + round(bbox.x1)) * 3 + 2] = 0;
+		// bbox right border
+		ppm.buffer[(y * ppm.w + round(bbox.x2)) * 3] = 255;
+		ppm.buffer[(y * ppm.w + round(bbox.x2)) * 3 + 1] = 0;
+		ppm.buffer[(y * ppm.w + round(bbox.x2)) * 3 + 2] = 0;
+	}
+	outfile.write(reinterpret_cast<char*>(ppm.buffer), ppm.w * ppm.h * 3);
+}

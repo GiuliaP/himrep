@@ -4,11 +4,16 @@
 
 option(BUILD_sparseCoder "Build sparseCoder" OFF)
 option(BUILD_GIECoder "Build GIECoder" OFF)
-option(BUILD_caffeCoder "Build caffeCoder" ON)
-option(BUILD_linearClassifierModule "Build linearClassifierModule" ON)
+option(BUILD_faster-rcnn_tensorrt "Build faster-rcnn_tensorrt" ON)
+option(BUILD_caffeCoder "Build caffeCoder" OFF)
+option(BUILD_linearClassifierModule "Build linearClassifierModule" OFF)
 
 if (BUILD_GIECoder)
 	add_subdirectory(GIECoder)
+endif()
+
+if (BUILD_faster-rcnn_tensorrt)
+	add_subdirectory(faster-rcnn_tensorrt)
 endif()
 
 if (BUILD_sparseCoder)
