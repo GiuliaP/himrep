@@ -184,7 +184,7 @@ public:
 
     ~fasterRCNNtensorRTExtractor();
 
-    bool extract(cv::Mat &image, std::vector< std::vector<float> > &detectionScores, 
+    bool extract(cv::Mat &image, std::vector<int> &detectionClasses, std::vector< std::vector<float> > &detectionScores, 
                 std::vector< std::vector< std::vector<float> > > &detectionBoxes, float (&times)[2]);
     
     bool draw_detection(cv::Mat &image, cv::Mat &outImage);

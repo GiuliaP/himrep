@@ -471,7 +471,7 @@ fasterRCNNtensorRTExtractor::~fasterRCNNtensorRTExtractor()
     delete[] anchorsScales;
 }
 
-bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector< std::vector<float> > &detectionScores, std::vector< std::vector< std::vector<float> > > &detectionBoxes, float (&times)[2])
+bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector<int> &detectionClasses, std::vector< std::vector<float> > &detectionScores, std::vector< std::vector< std::vector<float> > > &detectionBoxes, float (&times)[2])
 {
 
     times[0] = 0.0f;
@@ -502,12 +502,12 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector< std::vect
 	 {
 		
 		imInfo[i * 3] = float(imMat.rows);                 // number of rows
-		imInfo[i * 3 + 1] = float(imMat.cols);            // number of columns
-		imInfo[i * 3 + 2] = 1;                               // image scale
+		imInfo[i * 3 + 1] = float(imMat.cols);             // number of columns
+		imInfo[i * 3 + 2] = float(inputH) / float(imMat.rows);   // image scale
 	}
 	
-	//std::cout << imMat.rows << " - " << imMat.cols << std::endl;
 	
+	//std::cout << imMat.rows << " - " << imMat.cols << std::endl;
 	//std::cout << resizeHeight << " - " << resizeWidth << std::endl;
 	
     // resize (to ... or to the size of the mean image)
@@ -515,11 +515,11 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector< std::vect
     {
        if (imMat.rows > resizeHeight || imMat.cols > resizeWidth)
        {
-           cv::resize(imMat, imMat, cv::Size(resizeHeight, resizeWidth), 0, 0, CV_INTER_LANCZOS4);
+           cv::resize(imMat, imMat, cv::Size(resizeWidth, resizeHeight), 0, 0, CV_INTER_LANCZOS4);
        }
        else
        {
-           cv::resize(imMat, imMat, cv::Size(resizeHeight, resizeWidth), 0, 0, CV_INTER_LINEAR);
+           cv::resize(imMat, imMat, cv::Size(resizeWidth, resizeHeight), 0, 0, CV_INTER_LINEAR);
        }
     }
 
@@ -528,7 +528,6 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector< std::vect
     int w_off = (imMat.cols - inputW) / 2;
 
     //std::cout << h_off << " - " << w_off << std::endl;
-    
     //std::cout << inputH << " - " << inputW << std::endl;
     
     cv::Mat cv_cropped_img = imMat;
@@ -638,29 +637,38 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector< std::vect
 			
 		// Show results
 
-		std::vector< std::vector<float> > detectionBoxes_c;
-		std::vector<float> detectionScores_c;
-		
-		for (unsigned k = 0; k < indices.size(); ++k)
-		{
-			int idx = indices[k];
-		
-		   float score = clsProbs[idx*OUTPUT_CLS_SIZE + c];
-	
-			std::vector<float> box;
-			box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4]);
-			box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4 + 1]);
-			box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4 + 2]);
-			box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4 + 3]);
-			
-			detectionScores_c.push_back(score);
-			detectionBoxes_c.push_back(box);
-				
-	   }
+		if (!indices.empty()) 
+	   {
+	      std::vector< std::vector<float> > detectionBoxes_c;
+		   std::vector<float> detectionScores_c;
 	   
-	   detectionScores.push_back(detectionScores_c);
-	   detectionBoxes.push_back(detectionBoxes_c);
-	  
+		   for (unsigned k = 0; k < indices.size(); ++k)
+		   {
+			   int idx = indices[k];
+		
+		      float score = clsProbs[idx*OUTPUT_CLS_SIZE + c];
+	
+			   std::vector<float> box;
+			   box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4]);
+			   box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4 + 1]);
+			   box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4 + 2]);
+			   box.push_back(predBBoxes[idx*OUTPUT_BBOX_SIZE + c * 4 + 3]);
+			
+			   detectionScores_c.push_back(score);
+			   detectionBoxes_c.push_back(box);
+
+	      }
+	   
+	      detectionClasses.push_back(c);
+	      detectionScores.push_back(detectionScores_c);
+	      detectionBoxes.push_back(detectionBoxes_c);
+	         
+	      std::cout << detectionClasses[c] << std::endl;
+	      std::cout << detectionScores_c.size() << std::endl;
+         std::cout << detectionBoxes_c.size() << std::endl;
+         
+      }
+
 	}
 
     return true;

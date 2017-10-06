@@ -95,12 +95,13 @@ private:
             cv::Mat tmp_mat = cv::cvarrToMat((IplImage*)img.getIplImage());
             cv::cvtColor(tmp_mat, matImg, CV_RGB2BGR);
 
-            vector< vector<float> > detectionScores;
-            vector< vector< vector<float> > > detectionBoxes;
+            std::vector< std::vector<float> > detectionScores;
+            std::vector< std::vector< std::vector<float> > > detectionBoxes;
+            std::vector<int> detectionClasses;
             
             // Extract the feature vector
             float times[2];
-            if (!rt_extractor->extract(matImg, detectionScores, detectionBoxes, times))
+            if (!rt_extractor->extract(matImg, detectionClasses, detectionScores, detectionBoxes, times))
             {
                 std::cout << "fasterRCNNtensorRTExtractor::extract(): failed..." << std::endl;
                 return;
@@ -117,49 +118,53 @@ private:
             if (port_out_detection.getOutputCount())
             {
                
-               std::cout << detectionScores.size() << std::endl;
-               std::cout << detectionBoxes.size() << std::endl;
+               if (!detectionScores.empty() && !detectionBoxes.empty() && !detectionClasses.empty())
+               { 
+                  std::cout << detectionClasses.size() << std::endl;
+                  std::cout << detectionScores.size() << std::endl;
+                  std::cout << detectionBoxes.size() << std::endl;
                  
-               Bottle allScores;
-               for (int c=0; c<nClasses; c++) // skip the background
-               {
-                  if (!detectionScores[c].empty())
-                  {  
-                     Bottle &b=allScores.addList();
+                  Bottle allScores;
+                  for (int c=0; c<detectionClasses.size(); c++) // skip the background
+                  {
+                     if (!detectionScores[c].empty() && !detectionBoxes[c].empty())
+                     {  
+                        Bottle &b = allScores.addList();
                      
-                     b.addString(CLASSES[c+1]);
+                        b.addString(CLASSES[detectionClasses[c]]);
                   
-                     Bottle &bb = b.addList();
-                     for (int k=0; k<detectionScores[c].size(); k++)
-                     {
-                        std::cout << detectionScores[c].size() << std::endl;
-                        std::cout << detectionScores[c][k] << std::endl;
+                        Bottle &bb = b.addList();
+                        for (int k=0; k<detectionScores[c].size(); k++)
+                        {
+                           std::cout << CLASSES[detectionClasses[c]] << ": " 
+                           << detectionScores[c][k] << "in (" << detectionBoxes[c][k][0] << ", "<< detectionBoxes[c][k][1] << ") - (" 
+                           << detectionBoxes[c][k][2] << ", " << detectionBoxes[c][k][3] << ")" << std::endl;
+
+                           bb.addDouble(detectionScores[c][k]);
                         
-                        bb.addDouble(detectionScores[c][k]);
-                        
-                        
-                        bb.addDouble(detectionBoxes[c][k][0]);
-                        bb.addDouble(detectionBoxes[c][k][1]);
-                        bb.addDouble(detectionBoxes[c][k][2]);
-                        bb.addDouble(detectionBoxes[c][k][3]);
+                           bb.addDouble(detectionBoxes[c][k][0]);
+                           bb.addDouble(detectionBoxes[c][k][1]);
+                           bb.addDouble(detectionBoxes[c][k][2]);
+                           bb.addDouble(detectionBoxes[c][k][3]);
+                        }
                      }
                   }
-               }
                
-               if (allScores.size()>0)
-               {
-                  port_out_detection.setEnvelope(stamp);
-                  port_out_detection.write(allScores);
-               }
+                  if (allScores.size()>0)
+                  {
+                     port_out_detection.setEnvelope(stamp);
+                     port_out_detection.write(allScores);
+                  }
+              }
             }
 
             if (port_out_img.getOutputCount())
             {
                port_out_img.setEnvelope(stamp);
                 
-               for (int c=0; c<nClasses; c++) // skip the background
+               for (int c=0; c<detectionClasses.size(); c++) // skip the background
                {
-                  if (!detectionScores[c].empty())
+                  if (!detectionScores[c].empty() && !detectionBoxes[c].empty())
                   {  
                      for (int k=0; k<detectionScores[c].size(); k++)
                      {
@@ -175,8 +180,10 @@ private:
 			               if (y_text<5)
 				               y_text = bry+2;
 				            
-				            std::string text_string = CLASSES[c+1] + ": " + detectionScores[c][k];
+				            std::string text_string = CLASSES[detectionClasses[c]] + ": " + std::to_string(detectionScores[c][k]);
 				            
+				            std::cout << text_string << std::endl;
+                        
 				            cv::rectangle(tmp_mat,cv::Point(tlx,tly),cv::Point(brx,bry),cv::Scalar(255,255,255),2);
 			               cv::putText(tmp_mat,text_string.c_str(),cv::Point(x_text,y_text), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255,255,255), 2);
 			      
