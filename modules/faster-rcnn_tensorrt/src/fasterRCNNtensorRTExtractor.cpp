@@ -383,7 +383,33 @@ bool fasterRCNNtensorRTExtractor::init(std::string _caffemodel_file,
        resizeWidth = _resizeWidth;
     }
     
-   // host memory for outputs 
+   // host memory for outputs
+   
+   /*if ( !cudaAllocMapped((void**)&data, (void**)&buffers[indices[0]], batchSize*inputC*inputH*inputW* sizeof(float)) )
+   {
+	   std::cout << "Failed to alloc CUDA mapped memory." << std::endl;
+   }
+   
+   if ( !cudaAllocMapped((void**)&imInfo, (void**)&buffers[indices[1]], batchSize * 3* sizeof(float)) )
+   {
+	   std::cout << "Failed to alloc CUDA mapped memory." << std::endl;
+   }
+   
+   if ( !cudaAllocMapped((void**)&bboxPreds, (void**)&buffers[indices[2]], batchSize * nmsMaxOut * OUTPUT_BBOX_SIZE* sizeof(float)) )
+   {
+	   std::cout << "Failed to alloc CUDA mapped memory." << std::endl;
+   }
+   
+   if ( !cudaAllocMapped((void**)&clsProbs, (void**)&buffers[indices[3]], batchSize * nmsMaxOut * OUTPUT_CLS_SIZE* sizeof(float)) )
+   {
+	   std::cout << "Failed to alloc CUDA mapped memory." << std::endl;
+   }
+   
+   if ( !cudaAllocMapped((void**)&rois, (void**)&buffers[indices[4]], batchSize * nmsMaxOut * 4* sizeof(float)) )
+   {
+	   std::cout << "Failed to alloc CUDA mapped memory." << std::endl;
+   }*/
+   
    data = new float[batchSize*inputC*inputH*inputW];
    imInfo = new float[batchSize * 3];	
 	bboxPreds = new float[batchSize * nmsMaxOut * OUTPUT_BBOX_SIZE];
@@ -413,7 +439,7 @@ bool fasterRCNNtensorRTExtractor::init(std::string _caffemodel_file,
     if (CUDA_FAILED(cudaMalloc(&buffers[indices[4]], batchSize * nmsMaxOut * 4 * sizeof(float)) ) )
     {
        return false;
-    } 
+    }
       
     predBBoxes = new float[nmsMaxOut * OUTPUT_BBOX_SIZE];
 
@@ -462,6 +488,12 @@ fasterRCNNtensorRTExtractor::~fasterRCNNtensorRTExtractor()
 	if (CUDA_FAILED(cudaFree(buffers[indices[4]])) )
 	   std::cout << " failed CUDA deallocation "<< std::endl;
 
+    /*cudaFreeMapped(data);
+    cudaFreeMapped(imInfo);
+    cudaFreeMapped(bboxPreds);
+    cudaFreeMapped(clsProbs);
+    cudaFreeMapped(rois); */  
+    
     delete[] predBBoxes;
     
     if (mean_values[0]==-1)
@@ -490,27 +522,33 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector<int> &dete
     {
         cudaEventCreate(&startPrep);
         cudaEventCreate(&startNet);
+        
         cudaEventCreate(&stopPrep);
         cudaEventCreate(&stopNet);
+        
         cudaEventRecord(startPrep, NULL);
-        cudaEventRecord(startNet, NULL);
     }
     
     // Image preprocessing
- 
-    for (int i = 0; i < batchSize; ++i)
-	 {
-		
-		imInfo[i * 3] = float(imMat.rows);                 // number of rows
-		imInfo[i * 3 + 1] = float(imMat.cols);             // number of columns
-		imInfo[i * 3 + 2] = float(inputH) / float(imMat.rows);   // image scale
-	}
+
+   imInfo[0] = float(imMat.rows);                 // number of rows
+   imInfo[1] = float(imMat.cols);             // number of columns
 	
 	
 	//std::cout << imMat.rows << " - " << imMat.cols << std::endl;
 	//std::cout << resizeHeight << " - " << resizeWidth << std::endl;
 	
-    // resize (to ... or to the size of the mean image)
+	int im_size_min =imMat.rows;
+	int im_size_max = imMat.cols;
+	int target_size = inputH;
+	imInfo[2] = float(target_size) / float(im_size_min);
+        
+   if ( (int)(imInfo[2] * im_size_max) > 1000)
+       imInfo[2] = float(1000) / float(im_size_max);
+       
+    cv::resize(imMat, imMat, cv::Size(), imInfo[2], imInfo[2], CV_INTER_LINEAR);
+       
+    /*// resize (to ... or to the size of the mean image)
     if (imMat.rows != resizeHeight || imMat.cols != resizeWidth)
     {
        if (imMat.rows > resizeHeight || imMat.cols > resizeWidth)
@@ -521,7 +559,7 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector<int> &dete
        {
            cv::resize(imMat, imMat, cv::Size(resizeWidth, resizeHeight), 0, 0, CV_INTER_LINEAR);
        }
-    }
+    }*/
 
     // crop and subtract the mean image or the mean pixel
     int h_off = (imMat.rows - inputH) / 2;
@@ -563,6 +601,8 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector<int> &dete
         // Record the stop event
         cudaEventRecord(stopPrep, NULL);
 
+        cudaEventRecord(startNet, NULL);
+        
         // Wait for the stop event to complete
         cudaEventSynchronize(stopPrep);
 
@@ -597,18 +637,6 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector<int> &dete
 	// release the stream and the buffers
 	cudaStreamDestroy(stream);
 
-    if (timing)
-    {
-        // Record the stop event
-        cudaEventRecord(stopNet, NULL);
-
-        // Wait for the stop event to complete
-        cudaEventSynchronize(stopNet);
-
-        cudaEventElapsedTime(times+1, startNet, stopNet);
-
-    }
-    
    // unscale back to raw image space
 	for (int j=0; j<nmsMaxOut*4 && imInfo[2]!=1; ++j)
 	    rois[j] /= imInfo[2];
@@ -670,6 +698,18 @@ bool fasterRCNNtensorRTExtractor::extract(cv::Mat &imMat, std::vector<int> &dete
       }
 
 	}
+	
+	if (timing)
+    {
+        // Record the stop event
+        cudaEventRecord(stopNet, NULL);
+
+        // Wait for the stop event to complete
+        cudaEventSynchronize(stopNet);
+
+        cudaEventElapsedTime(times+1, startNet, stopNet);
+
+    }
 
     return true;
 
