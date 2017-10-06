@@ -95,8 +95,8 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 
 include_directories(${PROJECT_SOURCE_DIR})
 
-set(folder_source main.cpp cudaUtility.cpp fasterRCNNtensorRTExtractor.cpp)
-set(folder_header fasterRCNNtensorRTExtractor.h)
+set(folder_source main.cpp cudaUtility.h fasterRCNNtensorRTExtractor.cpp)
+set(folder_header fasterRCNNtensorRTExtractor.h PluginFactory.h Reshape.h)
 source_group("Source Files" FILES ${folder_source})
 source_group("Header Files" FILES ${folder_header})
 

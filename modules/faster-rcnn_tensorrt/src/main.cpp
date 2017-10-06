@@ -48,10 +48,6 @@ using namespace yarp::os;
 using namespace yarp::sig;
 using namespace yarp::math;
 
-#define CMD_HELP                    VOCAB4('h','e','l','p')
-#define DUMP_CODE                   VOCAB4('d','u','m','p')
-#define DUMP_STOP                   VOCAB4('s','t','o','p')
-
 class fasterRCNNtensorRTPort: public BufferedPort<Image>
 {
 private:
@@ -62,8 +58,6 @@ private:
 
     string                        contextPath;
 
-    bool                          dump_code;
-
     double                        rate;
     double                        last_read;
 
@@ -71,49 +65,42 @@ private:
 
     cv::Mat                       matImg;
 
+    string*                       CLASSES;
+    int                           nClasses;
+                            
     Port                          port_out_img;
-    Port                          port_out_code;
-
-    FILE                          *fout_code;
+    Port 			                port_out_detection;
 
     Semaphore                     mutex;
 
     // Data (specific for each method - instantiate only those are needed)
 
-    fasterRCNNtensorRTExtractor              *rt_extractor;
+    fasterRCNNtensorRTExtractor   *rt_extractor;
 
     void onRead(Image &img)
     {
 
     	// Read at specified rate
-        if (Time::now() - last_read < rate)
-            return;
+      if (Time::now() - last_read < rate)
+         return;
 
-        mutex.wait();
-
-        // If something arrived...
-        if (img.width()>0 && img.height()>0)
-        {
+      mutex.wait();
+    
+      // If something arrived...
+      if (img.width()>0 && img.height()>0)
+      {
 
             // Convert the image and check that it is continuous
 
             cv::Mat tmp_mat = cv::cvarrToMat((IplImage*)img.getIplImage());
             cv::cvtColor(tmp_mat, matImg, CV_RGB2BGR);
 
-	    // input image
-            float* data = new float[INPUT_C*INPUT_H*INPUT_W];
-
-            // outputs
-            float* rois = new float[nmsMaxOut * 4];
-            float* bboxPreds = new float[nmsMaxOut * OUTPUT_BBOX_SIZE];
-            float* clsProbs = new float[nmsMaxOut * OUTPUT_CLS_SIZE];
-
-            // predicted bounding boxes
-            float* predBBoxes = new float[nmsMaxOut * OUTPUT_BBOX_SIZE];
-
+            vector< vector<float> > detectionScores;
+            vector< vector< vector<float> > > detectionBoxes;
+            
             // Extract the feature vector
             float times[2];
-            if (!rt_extractor->extract(data, imInfo, bboxPreds, clsProbs, rois, times))
+            if (!rt_extractor->extract(matImg, detectionScores, detectionBoxes, times))
             {
                 std::cout << "fasterRCNNtensorRTExtractor::extract(): failed..." << std::endl;
                 return;
@@ -121,80 +108,86 @@ private:
 
             if (rt_extractor->timing)
             {
-                std::cout << times[0] << ": PREP " << times[1] << ": NET" << std::endl;
+                std::cout << "PREP: " << times[0] << "  -  NET: " << times[1] << std::endl;
             }
-
-           // unscale back to raw image space
-	for (int i = 0; i < N; ++i)
-	{
-		float * rois_offset = rois + i * nmsMaxOut * 4;
-		for (int j = 0; j < nmsMaxOut * 4 && imInfo[i * 3 + 2] != 1; ++j)
-			rois_offset[j] /= imInfo[i * 3 + 2];
-	}
-
-	bboxTransformInvAndClip(rois, bboxPreds, predBBoxes, imInfo, N, nmsMaxOut, OUTPUT_CLS_SIZE);
-
-	const float nms_threshold = 0.3f;
-	const float score_threshold = 0.8f;
-
-	for (int i = 0; i < N; ++i)
-	{
-		float *bbox = predBBoxes + i * nmsMaxOut * OUTPUT_BBOX_SIZE;
-		float *scores = clsProbs + i * nmsMaxOut * OUTPUT_CLS_SIZE;
-		for (int c = 1; c < OUTPUT_CLS_SIZE; ++c) // skip the background
-		{
-			std::vector<std::pair<float, int> > score_index;
-			for (int r = 0; r < nmsMaxOut; ++r)
-			{
-				if (scores[r*OUTPUT_CLS_SIZE + c] > score_threshold)
-				{
-					score_index.push_back(std::make_pair(scores[r*OUTPUT_CLS_SIZE + c], r));
-					std::stable_sort(score_index.begin(), score_index.end(),
-						[](const std::pair<float, int>& pair1,
-							const std::pair<float, int>& pair2) {
-						return pair1.first > pair2.first;
-					});
-				}
-			}
-
-			// apply NMS algorithm
-			std::vector<int> indices = nms(score_index, bbox, c, OUTPUT_CLS_SIZE, nms_threshold);
-			// Show results
-			for (unsigned k = 0; k < indices.size(); ++k)
-			{
-				int idx = indices[k];
-				std::string storeName = CLASSES[c] + "-" + std::to_string(scores[idx*OUTPUT_CLS_SIZE + c]) + ".ppm";
-				std::cout << "Detected " << CLASSES[c] << " in " << ppms[i].fileName << " with confidence " << scores[idx*OUTPUT_CLS_SIZE + c] * 100.0f << "% "
-					<< " (Result stored in " << storeName << ")." << std::endl;
-
-				BBox b{ bbox[idx*OUTPUT_BBOX_SIZE + c * 4], bbox[idx*OUTPUT_BBOX_SIZE + c * 4 + 1], bbox[idx*OUTPUT_BBOX_SIZE + c * 4 + 2], bbox[idx*OUTPUT_BBOX_SIZE + c * 4 + 3] };
-				writePPMFileWithBBox(storeName, ppms[i], b);
-			}
-		}
-	}
 
             Stamp stamp;
             this->getEnvelope(stamp);
 
-            if (port_out_code.getOutputCount())
+            if (port_out_detection.getOutputCount())
             {
-                port_out_code.setEnvelope(stamp);
-                yarp::sig::Vector codingYarpVec(codingVec.size(), &codingVec[0]);
-                port_out_code.write(codingYarpVec);
+               
+               std::cout << detectionScores.size() << std::endl;
+               std::cout << detectionBoxes.size() << std::endl;
+                 
+               Bottle allScores;
+               for (int c=0; c<nClasses; c++) // skip the background
+               {
+                  if (!detectionScores[c].empty())
+                  {  
+                     Bottle &b=allScores.addList();
+                     
+                     b.addString(CLASSES[c+1]);
+                  
+                     Bottle &bb = b.addList();
+                     for (int k=0; k<detectionScores[c].size(); k++)
+                     {
+                        std::cout << detectionScores[c].size() << std::endl;
+                        std::cout << detectionScores[c][k] << std::endl;
+                        
+                        bb.addDouble(detectionScores[c][k]);
+                        
+                        
+                        bb.addDouble(detectionBoxes[c][k][0]);
+                        bb.addDouble(detectionBoxes[c][k][1]);
+                        bb.addDouble(detectionBoxes[c][k][2]);
+                        bb.addDouble(detectionBoxes[c][k][3]);
+                     }
+                  }
+               }
+               
+               if (allScores.size()>0)
+               {
+                  port_out_detection.setEnvelope(stamp);
+                  port_out_detection.write(allScores);
+               }
             }
 
             if (port_out_img.getOutputCount())
             {
-                port_out_img.write(img);
+               port_out_img.setEnvelope(stamp);
+                
+               for (int c=0; c<nClasses; c++) // skip the background
+               {
+                  if (!detectionScores[c].empty())
+                  {  
+                     for (int k=0; k<detectionScores[c].size(); k++)
+                     {
+
+                        int tlx = (int)detectionBoxes[c][k][0];
+                        int tly = (int)detectionBoxes[c][k][1];
+                        int brx = (int)detectionBoxes[c][k][2];
+                        int bry = (int)detectionBoxes[c][k][3];
+                        
+                        int y_text, x_text;
+			               y_text = tly-10;
+			               x_text = tlx;
+			               if (y_text<5)
+				               y_text = bry+2;
+				            
+				            std::string text_string = CLASSES[c+1] + ": " + detectionScores[c][k];
+				            
+				            cv::rectangle(tmp_mat,cv::Point(tlx,tly),cv::Point(brx,bry),cv::Scalar(255,255,255),2);
+			               cv::putText(tmp_mat,text_string.c_str(),cv::Point(x_text,y_text), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255,255,255), 2);
+			      
+                     }
+                  }
+               }
+  
+               port_out_img.write(img);
             }
         }
-
-delete[] data;
-	delete[] rois;
-	delete[] bboxPreds;
-	delete[] clsProbs;
-	delete[] predBBoxes;
-
+        
         mutex.post();
 
     }
@@ -211,15 +204,12 @@ public:
         // Data initialization (specific for Caffe method)
 
         // Binary file (.caffemodel) containing the network's weights
-        string caffemodel_file = rf.check("caffemodel_file", Value("bvlc_googlenet.caffemodel")).asString().c_str();
+        string caffemodel_file = rf.check("caffemodel_file", Value("VGG16_faster_rcnn_final.caffemodel")).asString().c_str();
         cout << "Setting .caffemodel file to " << caffemodel_file << endl;
 
         // Text file (.prototxt) defining the network structure
-        string prototxt_file = rf.check("prototxt_file", Value("deploy.prototxt")).asString().c_str();
+        string prototxt_file = rf.check("prototxt_file", Value("faster_rcnn_test_iplugin.prototxt")).asString().c_str();
         cout << "Setting .prototxt file to " << prototxt_file << endl;
-
-        // Name of blobs to be extracted
-        string blob_name = rf.check("blob_name", Value("pool5/7x7_s1")).asString().c_str();
 
         // Boolean flag for timing or not the feature extraction
         bool timing = rf.check("timing",Value(false)).asBool();
@@ -234,17 +224,18 @@ public:
         else if (rf.find("binaryproto_meanfile").isNull())
         {
             meanR = rf.check("meanR", Value(123)).asDouble();
-            meanG = rf.check("meanG", Value(117)).asDouble();
-            meanB = rf.check("meanB", Value(104)).asDouble();
-            resizeWidth = rf.check("resizeWidth", Value(256)).asDouble();
-            resizeHeight = rf.check("resizeHeight", Value(256)).asDouble();
+            meanG = rf.check("meanG", Value(116)).asDouble();
+            meanB = rf.check("meanB", Value(103)).asDouble();
+            
+            resizeWidth = rf.check("resizeWidth", Value(500)).asDouble();
+            resizeHeight = rf.check("resizeHeight", Value(375)).asDouble();
             std::cout << "Setting mean to " << " R: " << meanR << " G: " << meanG << " B: " << meanB << std::endl;
             std::cout << "Resizing anysotropically to " << " W: " << resizeWidth << " H: " << resizeHeight << std::endl;
 
         }
         else if (rf.find("meanR").isNull())
         {
-            binaryproto_meanfile = rf.check("binaryproto_meanfile", Value("imagenet_mean.binaryproto")).asString().c_str();
+            binaryproto_meanfile = rf.check("binaryproto_meanfile", Value("mean.binaryproto")).asString().c_str();
             cout << "Setting .binaryproto file to " << binaryproto_meanfile << endl;
         }
         else
@@ -252,36 +243,141 @@ public:
             std::cout << "ERROR: need EITHER mean file (.binaryproto) OR mean pixel values!" << std::endl;
         }
 
+        string in_blob_names = rf.check("in_blob_names", Value("data,iminfo")).asString().c_str();
+        string out_blob_names = rf.check("out_blob_names", Value("bbox_pred,cls_prob,rois")).asString().c_str();
+        
+        int batchSize = rf.check("batch_size", Value(1)).asInt();
+        
+        ///////////////////////////////
+        
+         int poolingH = rf.check("poolingH", Value(7)).asInt();
+         int poolingW = rf.check("poolingW", Value(7)).asInt();
+   
+         int featuresStride = rf.check("featuresStride", Value(16)).asInt();
+         int preNmsTop = rf.check("preNmsTop", Value(6000)).asInt();
+         int nmsMaxOut = rf.check("nmsMaxOut", Value(300)).asInt();
+   
+         int anchorsRatioCount = rf.check("anchorsRatioCount", Value(3)).asInt();
+         int anchorsScaleCount = rf.check("anchorsScaleCount", Value(3)).asInt();
+   
+         float iouThreshold = rf.check("iouThreshold", Value(0.7)).asDouble();
+         float minBoxSize = rf.check("minBoxSize", Value(16)).asDouble();
+         float spatialScale = rf.check("spatialScale", Value(0.0625)).asDouble();
+   
+         float *anchorsRatios = new float[anchorsRatioCount];
+         float *anchorsScales = new float[anchorsScaleCount];
+
+         Bottle *r = rf.find("anchorsRatios").asList();
+         Bottle *s = rf.find("anchorsScales").asList();
+         
+         for (int i=0; i<r->size(); i++)
+         {
+            anchorsRatios[i] = r->get(i).asDouble();
+         }
+         
+         for (int i=0; i<s->size(); i++)
+         {
+            anchorsScales[i] = s->get(i).asDouble();
+         }
+         
+         float nms_threshold = rf.check("nms_threshold", Value(0.3)).asDouble();
+	      float score_threshold = rf.check("score_threshold", Value(0.8)).asDouble();
+        
+        
+        //////////////////////////////
+        
+        if (rf.check("label_file"))
+        {
+            string label_file = rf.check("label_file", Value("")).asString().c_str() ;
+            cout << "Setting labels to: " << label_file << endl;
+            
+            ifstream infile;
+            
+            string obj_name;
+            vector<string> obj_names;
+            int obj_idx;
+            vector<int> obj_idxs;
+            
+            infile.open(label_file.c_str());
+            infile>>obj_name;
+            infile>>obj_idx;
+            
+            while (!infile.eof()) {
+            
+               std::cout << obj_name << " --> " << obj_idx <<std::endl;
+               obj_names.push_back(obj_name);
+               obj_idxs.push_back(obj_idx);
+               
+               infile>> obj_name;
+               infile>>obj_idx;
+            
+            }
+            infile.close();
+
+            if (obj_names.size()!=obj_idxs.size())
+            {
+               std::cout << "label file wrongly formatted!" << std::endl;
+            } 
+        
+            nClasses = obj_names.size();
+            CLASSES = new string[nClasses];
+            for (int i=0; i<nClasses; i++)
+            {
+               CLASSES[obj_idxs[i]] = obj_names[i];
+            }
+        }
+        else
+        {
+               std::cout << "missing label file!" << std::endl;
+        }
+        
+        //////////////////////////////
+        
+        std::cout << "caffemodel_file " << caffemodel_file << std::endl;
+        std::cout << "binaryproto_meanfile " << binaryproto_meanfile << std::endl;
+        std::cout << "meanR " << meanR << std::endl;
+        std::cout << "meanG " << meanG << std::endl;
+        std::cout << "meanB " << meanB << std::endl;
+        
+        std::cout << "prototxt_file " << prototxt_file << std::endl;
+        std::cout << "resizeWidth " << resizeWidth << std::endl;
+        std::cout << "resizeHeight " << resizeHeight << std::endl;
+        std::cout << "timing " << timing << std::endl;
+
+        std::cout << "in_blob_names " << in_blob_names << std::endl;
+        std::cout << "out_blob_names " << out_blob_names << std::endl;
+        std::cout << "batchSize " << batchSize << std::endl;
+        
+        std::cout << "nms_threshold " << nms_threshold << std::endl;
+        std::cout << "score_threshold " << score_threshold << std::endl;
+        std::cout << "nClasses " << nClasses << std::endl;
+        
         rt_extractor = new fasterRCNNtensorRTExtractor(caffemodel_file, binaryproto_meanfile, meanR, meanG, meanB,
-                prototxt_file, resizeWidth, resizeHeight,
-                blob_name,
-                timing);
-	    if( !rt_extractor )
-	    {
-		    cout << "Failed to initialize fasterRCNNtensorRTExtractor" << endl;
-	    }
+                prototxt_file, resizeWidth, resizeHeight, 
+                timing,
+                in_blob_names, out_blob_names,
+                batchSize, 
+                poolingH, poolingW, featuresStride, preNmsTop, nmsMaxOut, iouThreshold, minBoxSize, spatialScale, 
+                anchorsRatios, anchorsRatioCount, anchorsScales, anchorsScaleCount, 
+                nms_threshold, score_threshold,
+                nClasses);
+     
+	     if ( !rt_extractor )
+	     {
+		     std::cout << "Failed to initialize fasterRCNNtensorRTExtractor" << std::endl;
+	     }
 
         // Data (common to all methods)
 
         string name = rf.find("name").asString().c_str();
 
         port_out_img.open(("/"+name+"/img:o").c_str());
-        port_out_code.open(("/"+name+"/code:o").c_str());
+        port_out_detection.open(("/"+name+"/detection:o").c_str());
 
         BufferedPort<Image>::useCallback();
 
         rate = rf.check("rate",Value(0.0)).asDouble();
         last_read = 0.0;
-
-        dump_code = rf.check("dump_code");
-        if(dump_code)
-        {
-            string code_path = rf.check("dump_code",Value("codes.bin")).asString().c_str();
-            code_path = contextPath + "/" + code_path;
-            string code_write_mode = rf.check("append")?"wb+":"wb";
-
-            fout_code = fopen(code_path.c_str(),code_write_mode.c_str());
-        }
 
     }
 
@@ -289,7 +385,7 @@ public:
     {
         mutex.wait();
 
-        port_out_code.interrupt();
+        port_out_detection.interrupt();
         port_out_img.interrupt();
 
         BufferedPort<Image>::interrupt();
@@ -301,7 +397,7 @@ public:
     {
         mutex.wait();
 
-        port_out_code.resume();
+        port_out_detection.resume();
         port_out_img.resume();
 
         BufferedPort<Image>::resume();
@@ -313,87 +409,21 @@ public:
     {
         mutex.wait();
 
-        if (dump_code)
-        {
-            fclose(fout_code);
-        }
-
-        port_out_code.close();
+        port_out_detection.close();
         port_out_img.close();
 
-        delete gie_extractor;
+        delete rt_extractor;
 
         BufferedPort<Image>::close();
 
+        delete[] CLASSES;
+        
         mutex.post();
     }
 
     bool execReq(const Bottle &command, Bottle &reply)
     {
-        switch(command.get(0).asVocab())
-        {
-        case(CMD_HELP):
-            {
-            reply.clear();
-            reply.add(Value::makeVocab("many"));
-            reply.addString("[dump] [path-to-file] [a] to start dumping the codes in the context directory. Use 'a' for appending.");
-            reply.addString("[stop] to stop dumping.");
-            return true;
-            }
-
-        case(DUMP_CODE):
-            {
-            mutex.wait();
-
-            dump_code = true;
-            string code_path;
-            string code_write_mode;
-
-            if (command.size()==1)
-            {
-                code_path = contextPath + "/codes.bin";
-                code_write_mode="wb";
-            }
-            else if (command.size()==2)
-            {
-                if (strcmp(command.get(1).asString().c_str(),"a")==0)
-                {
-                    code_write_mode="wb+";
-                    code_path = contextPath + "/codes.bin";
-                } else
-                {
-                    code_write_mode="wb";
-                    code_path = command.get(1).asString().c_str();
-                }
-            } else if (command.size()==3)
-            {
-                code_write_mode="wb+";
-                code_path = command.get(2).asString().c_str();
-            }
-
-            fout_code = fopen(code_path.c_str(),code_write_mode.c_str());
-            reply.addString("Start dumping codes...");
-
-            mutex.post();
-            return true;
-            }
-
-        case(DUMP_STOP):
-            {
-            mutex.wait();
-
-            dump_code = false;
-            fclose(fout_code);
-            reply.addString("Stopped code dump.");
-
-            mutex.post();
-
-            return true;
-            }
-
-        default:
-            return false;
-        }
+    
     }
 
 };
@@ -494,3 +524,4 @@ int main(int argc, char *argv[])
 
     return mod.runModule(rf);
 }
+
