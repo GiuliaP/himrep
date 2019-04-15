@@ -32,6 +32,8 @@ if (LIBSVM_FOUND OR LIBSVMLIN_FOUND)
    source_group("Header Files" FILES ${folder_header})
    include_directories(${PROJECT_SOURCE_DIR}/include)
    add_executable(${projectname} ${folder_source} ${folder_header} )
+else()
+   message(FATAL_ERROR "Nor LIBSVMLIN neither LIBSVM is found => linearClassifierModule cannot be compiled")
 endif()
 
 if (LIBSVM_FOUND AND LIBSVMLIN_FOUND)

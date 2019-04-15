@@ -9,6 +9,7 @@ project(${PROJECTNAME})
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(OpenCV REQUIRED)
+find_package(Caffe REQUIRED)
 
 include_directories(${Caffe_INCLUDE_DIRS})
 
